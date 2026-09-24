@@ -1,0 +1,507 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="description" content="SRE Brain demo: GKE, Managed Service for Prometheus, Monarch, Cloud Logging and Automon incident correlation.">
+<title>SRE Brain — GKE Observability Demo</title>
+<style>
+:root{--bg:#07111f;--panel:#0d1a2b;--panel2:#101f33;--text:#edf5ff;--muted:#a9bad0;--cyan:#67e8f9;--violet:#a78bfa;--green:#4ade80;--yellow:#facc15;--red:#fb7185;--line:#243852;--code:#050b14}
+*{box-sizing:border-box}html{scroll-behavior:smooth}
+body{margin:0;background:linear-gradient(180deg,#06101d,#081526 45%,#07111f);color:var(--text);font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;line-height:1.65}
+a{color:var(--cyan);text-decoration:none}a:hover{text-decoration:underline}
+.container{width:min(1180px,92%);margin:auto}
+header{padding:76px 0 58px;border-bottom:1px solid var(--line);background:radial-gradient(circle at 85% 15%,rgba(167,139,250,.18),transparent 34%),radial-gradient(circle at 10% 5%,rgba(103,232,249,.13),transparent 30%)}
+.badge{display:inline-block;padding:6px 12px;border:1px solid #31506a;border-radius:999px;color:var(--cyan);background:#0b1929;font-size:13px}
+h1{font-size:clamp(38px,6vw,68px);line-height:1.03;letter-spacing:-2px;margin:18px 0}
+h2{font-size:31px;line-height:1.15;margin:0 0 18px}h3{font-size:21px;margin-top:28px}
+.lead{font-size:19px;color:var(--muted);max-width:930px}
+nav{position:sticky;top:0;z-index:10;background:rgba(6,14,26,.9);backdrop-filter:blur(12px);border-bottom:1px solid var(--line)}
+nav .container{display:flex;gap:20px;overflow:auto;padding:12px 0;white-space:nowrap}nav a{font-size:14px;color:#cad8ea}
+section{padding:58px 0;border-bottom:1px solid var(--line)}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(245px,1fr));gap:17px}
+.card{background:linear-gradient(180deg,var(--panel),var(--panel2));border:1px solid var(--line);border-radius:16px;padding:21px}
+.card p,.muted{color:var(--muted)}
+.kpi{font-size:27px;font-weight:800;color:var(--cyan)}
+.flow{display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:10px;margin:28px 0}
+.node{padding:15px 19px;border:1px solid #334965;border-radius:12px;background:#0d1b2e;text-align:center;min-width:150px}
+.arrow{font-size:23px;color:var(--violet)}
+pre{background:var(--code);border:1px solid var(--line);border-radius:12px;padding:18px;overflow:auto;color:#dbe8f8;font:13px/1.6 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}.inline{background:#142238;border:1px solid #293e5a;border-radius:5px;padding:2px 6px}
+.note{border-left:4px solid var(--cyan);padding:14px 18px;background:#0b1929;border-radius:8px;margin:20px 0}
+.note.green{border-left-color:var(--green)}.note.yellow{border-left-color:var(--yellow)}
+table{width:100%;border-collapse:collapse;background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+th,td{padding:12px 14px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}th{color:var(--cyan);background:#0b1728}td{color:#cad7e8}
+.step{counter-increment:step}.steps{counter-reset:step}.step h3:before{content:counter(step);display:inline-grid;place-items:center;width:30px;height:30px;border-radius:50%;background:var(--violet);margin-right:10px;font-size:14px;color:#fff}
+footer{padding:42px 0;text-align:center;color:var(--muted)}.small{font-size:13px;color:var(--muted)}
+ul,ol{padding-left:24px}.hero-grid{display:grid;grid-template-columns:1.5fr 1fr;gap:22px;align-items:stretch}
+@media(max-width:800px){.hero-grid{grid-template-columns:1fr}h1{letter-spacing:-1px}}
+</style>
+</head>
+<body>
+
+<header>
+<div class="container">
+<span class="badge">SRE Brain • GKE Observability Demo</span>
+<div class="hero-grid">
+<div>
+<h1>GKE → Prometheus → Monarch + Cloud Logging → Automon</h1>
+<p class="lead">A practical, command-driven SRE observability demo on Google Kubernetes Engine. The workload generates controlled incidents, Google Cloud collects metrics and logs, and a custom Python Automon layer correlates the signals and produces a diagnosis.</p>
+</div>
+<div class="card">
+<h3 style="margin-top:0">What this demonstrates</h3>
+<ul>
+<li>Application telemetry on GKE</li>
+<li>Managed Service for Prometheus</li>
+<li>PromQL queries through Google Cloud</li>
+<li>Cloud Logging queries</li>
+<li>Metric + log correlation</li>
+<li>Rule-based incident diagnosis</li>
+</ul>
+</div>
+</div>
+</div>
+</header>
+
+<nav><div class="container">
+<a href="#architecture">Architecture</a><a href="#concepts">Concepts</a><a href="#setup">Setup</a>
+<a href="#app">Application</a><a href="#prometheus">Prometheus</a><a href="#logging">Logging</a>
+<a href="#automon">Automon</a><a href="#testing">Testing</a><a href="#demo">Live Demo</a><a href="#github">GitHub</a>
+</div></nav>
+
+<main class="container">
+
+<section id="architecture">
+<h2>1. Architecture</h2>
+<p>The demo separates telemetry collection from incident intelligence.</p>
+<div class="flow">
+<div class="node">GKE<br><b>Payment API</b></div><div class="arrow">→</div>
+<div class="node">Managed<br><b>Prometheus</b></div><div class="arrow">→</div>
+<div class="node"><b>Monarch</b><br>time-series backend</div>
+</div>
+<div class="flow">
+<div class="node">GKE<br><b>JSON logs</b></div><div class="arrow">→</div>
+<div class="node"><b>Cloud Logging</b><br>log storage/query</div>
+</div>
+<div class="flow">
+<div class="node">PromQL<br><b>metrics</b></div><div class="arrow">+</div>
+<div class="node">Cloud Logging<br><b>events</b></div><div class="arrow">→</div>
+<div class="node"><b>Automon</b><br>correlation</div><div class="arrow">→</div>
+<div class="node"><b>Incident</b><br>diagnosis</div>
+</div>
+<div class="note"><b>Important Monarch distinction:</b> Monarch is Google's internal distributed time-series backend. This demo does not directly access an internal Monarch database. It queries managed time-series data through supported Google Cloud / Managed Service for Prometheus interfaces.</div>
+</section>
+
+<section id="concepts">
+<h2>2. What each component does</h2>
+<div class="grid">
+<div class="card"><h3>GKE</h3><p>Kubernetes platform where the payment API runs. The demo uses the <code class="inline">sre-demo</code> namespace.</p></div>
+<div class="card"><h3>Payment API</h3><p>Python incident simulator. It exposes Prometheus metrics on port 8000 and prints structured JSON logs.</p></div>
+<div class="card"><h3>Managed Service for Prometheus</h3><p>Google-managed Prometheus-compatible metrics collection and query service. Metrics can be queried with PromQL.</p></div>
+<div class="card"><h3>Monarch</h3><p>Google's distributed time-series backend. For this project it is the conceptual backend behind the supported managed metrics query path.</p></div>
+<div class="card"><h3>Cloud Logging</h3><p>Collects the GKE container logs and lets us filter ERROR/CRITICAL events and application messages.</p></div>
+<div class="card"><h3>Automon</h3><p>Custom Python SRE Brain. It queries metrics, reads incident logs, extracts signals, correlates them and emits a rule-based diagnosis.</p></div>
+</div>
+</section>
+
+<section id="setup">
+<h2>3. GCP / GKE setup</h2>
+<p>Environment used by this demo:</p>
+<table>
+<tr><th>Item</th><th>Value</th></tr>
+<tr><td>GCP project</td><td><code>project-330d3be3-79e9-4693-98e</code></td></tr>
+<tr><td>GKE cluster</td><td><code>sre-brain-demo</code></td></tr>
+<tr><td>Zone</td><td><code>us-central1-a</code></td></tr>
+<tr><td>Namespace</td><td><code>sre-demo</code></td></tr>
+</table>
+
+<h3>Authenticate and select the project</h3>
+<pre><code>gcloud auth login
+gcloud config set project project-330d3be3-79e9-4693-98e
+gcloud container clusters get-credentials sre-brain-demo \
+  --zone us-central1-a</code></pre>
+
+<h3>Create the namespace</h3>
+<pre><code>kubectl create namespace sre-demo</code></pre>
+
+<h3>Verify the cluster</h3>
+<pre><code>gcloud container clusters describe sre-brain-demo \
+  --zone us-central1-a \
+  --format="yaml(status,location,currentMasterVersion)"</code></pre>
+
+<h3>Verify Managed Service for Prometheus configuration</h3>
+<pre><code>gcloud container clusters describe sre-brain-demo \
+  --zone us-central1-a \
+  --format="yaml(monitoringConfig)"</code></pre>
+
+<h3>Basic Kubernetes checks</h3>
+<pre><code>kubectl get nodes
+kubectl get pods -n sre-demo
+kubectl get svc -n sre-demo</code></pre>
+</section>
+
+<section id="app">
+<h2>4. Application and incident lifecycle</h2>
+<p>The application intentionally cycles through a predictable incident lifecycle. Each phase lasts 60 seconds.</p>
+<div class="flow">
+<div class="node">NORMAL</div><div class="arrow">→</div>
+<div class="node">LATENCY_SPIKE</div><div class="arrow">→</div>
+<div class="node">ERROR_SPIKE</div><div class="arrow">→</div>
+<div class="node">CRITICAL</div><div class="arrow">→</div>
+<div class="node">RECOVERY</div><div class="arrow">↺</div>
+</div>
+
+<h3>Prometheus metrics</h3>
+<table>
+<tr><th>Metric</th><th>Meaning</th></tr>
+<tr><td><code>payment_requests_total</code></td><td>Total payment requests.</td></tr>
+<tr><td><code>payment_errors_total</code></td><td>Total failed payment requests.</td></tr>
+<tr><td><code>payment_request_latency_seconds</code></td><td>Histogram for latency distribution.</td></tr>
+<tr><td><code>payment_incident_phase</code></td><td>0=NORMAL, 1=LATENCY_SPIKE, 2=ERROR_SPIKE, 3=CRITICAL, 4=RECOVERY.</td></tr>
+</table>
+
+<h3>Structured log example</h3>
+<pre><code>{
+  "timestamp": "2026-09-24T10:00:00+00:00",
+  "severity": "CRITICAL",
+  "service": "payment-api",
+  "incident_phase": "CRITICAL",
+  "message": "Database connection pool exhausted",
+  "transaction_id": "TX-12345",
+  "latency_seconds": 4.21
+}</code></pre>
+
+<h3>Watch the application directly</h3>
+<pre><code>kubectl logs -n sre-demo deployment/incident-api -f</code></pre>
+
+<div class="note">The application is deliberately synthetic. Its purpose is to produce reproducible signals so the observability and correlation pipeline can be demonstrated live.</div>
+</section>
+
+<section id="prometheus">
+<h2>5. Managed Prometheus — test from Cloud Shell</h2>
+<p>The flow is:</p>
+<div class="flow">
+<div class="node">Application<br><b>/metrics</b></div><div class="arrow">→</div>
+<div class="node"><b>PodMonitoring</b></div><div class="arrow">→</div>
+<div class="node"><b>Managed Prometheus</b></div><div class="arrow">→</div>
+<div class="node"><b>PromQL API</b></div>
+</div>
+
+<h3>Verify PodMonitoring</h3>
+<pre><code>kubectl get podmonitoring -n sre-demo</code></pre>
+<p>Expected resource:</p>
+<pre><code>NAME           AGE
+incident-api   ...</code></pre>
+
+<h3>Query total requests</h3>
+<pre><code>curl -s \
+  "https://monitoring.googleapis.com/v1/projects/project-330d3be3-79e9-4693-98e/location/global/prometheus/api/v1/query?query=payment_requests_total" \
+  -H "Authorization: Bearer $(gcloud auth print-access-token)"</code></pre>
+
+<h3>Query total errors</h3>
+<pre><code>curl -s \
+  "https://monitoring.googleapis.com/v1/projects/project-330d3be3-79e9-4693-98e/location/global/prometheus/api/v1/query?query=payment_errors_total" \
+  -H "Authorization: Bearer $(gcloud auth print-access-token)"</code></pre>
+
+<h3>Query error rate</h3>
+<pre><code>curl -s \
+  "https://monitoring.googleapis.com/v1/projects/project-330d3be3-79e9-4693-98e/location/global/prometheus/api/v1/query?query=rate(payment_errors_total%5B1m%5D)" \
+  -H "Authorization: Bearer $(gcloud auth print-access-token)"</code></pre>
+
+<h3>Useful PromQL</h3>
+<pre><code># Request rate
+rate(payment_requests_total[5m])
+
+# Error rate
+rate(payment_errors_total[5m])
+
+# Error percentage
+100 * rate(payment_errors_total[5m])
+/
+rate(payment_requests_total[5m])
+
+# Average latency
+rate(payment_request_latency_seconds_sum[5m])
+/
+rate(payment_request_latency_seconds_count[5m])
+
+# P50
+histogram_quantile(
+  0.50,
+  sum(rate(payment_request_latency_seconds_bucket[5m])) by (le)
+)
+
+# P95
+histogram_quantile(
+  0.95,
+  sum(rate(payment_request_latency_seconds_bucket[5m])) by (le)
+)
+
+# P99
+histogram_quantile(
+  0.99,
+  sum(rate(payment_request_latency_seconds_bucket[5m])) by (le)
+)
+
+# Incident phase
+payment_incident_phase</code></pre>
+
+<div class="note yellow"><b>Counter note:</b> <code>payment_requests_total</code> and <code>payment_errors_total</code> are counters. They increase over time and can reset after a process restart. Rates over a window are generally more useful for incident analysis.</div>
+</section>
+
+<section id="logging">
+<h2>6. Cloud Logging — test from Cloud Shell</h2>
+
+<h3>Read recent logs from the namespace</h3>
+<pre><code>gcloud logging read \
+'resource.type="k8s_container" AND resource.labels.namespace_name="sre-demo"' \
+--limit=10 \
+--format="table(timestamp,severity,jsonPayload.service,jsonPayload.message)"</code></pre>
+
+<h3>Read ERROR and CRITICAL logs</h3>
+<pre><code>gcloud logging read \
+'resource.type="k8s_container"
+ AND resource.labels.namespace_name="sre-demo"
+ AND (severity="ERROR" OR severity="CRITICAL")' \
+--limit=20 \
+--format="table(timestamp,severity,jsonPayload.service,jsonPayload.message,jsonPayload.incident_phase)"</code></pre>
+
+<h3>Find database-related failures</h3>
+<pre><code>gcloud logging read \
+'resource.type="k8s_container"
+ AND resource.labels.namespace_name="sre-demo"
+ AND jsonPayload.message:"database"' \
+--limit=20 \
+--format="json"</code></pre>
+
+<h3>Why use both metrics and logs?</h3>
+<div class="grid">
+<div class="card"><h3>Metrics</h3><p>Quantify service behavior: traffic, error rate, latency and current incident phase.</p></div>
+<div class="card"><h3>Logs</h3><p>Provide application context: database timeout, retry, connection-pool exhaustion and other events.</p></div>
+<div class="card"><h3>Correlation</h3><p>Automon combines both signal types instead of treating an isolated metric or log as the whole incident.</p></div>
+</div>
+</section>
+
+<section id="automon">
+<h2>7. Automon — the SRE Brain</h2>
+<p>Automon is the custom incident-analysis layer. It is not a Google Cloud product; it is the Python code built for this demo.</p>
+
+<div class="flow">
+<div class="node">PromQL<br><b>Metrics</b></div><div class="arrow">+</div>
+<div class="node">Cloud Logging<br><b>Events</b></div><div class="arrow">→</div>
+<div class="node"><b>Signal extraction</b></div><div class="arrow">→</div>
+<div class="node"><b>Correlation</b></div><div class="arrow">→</div>
+<div class="node"><b>Diagnosis</b></div>
+</div>
+
+<h3>Signals Automon detects</h3>
+<ul>
+<li>High / elevated error rate</li>
+<li>High / severe P95 latency</li>
+<li>High / severe P99 latency</li>
+<li>ERROR logs</li>
+<li>CRITICAL logs</li>
+<li>Database timeouts</li>
+<li>Connection-pool exhaustion</li>
+</ul>
+
+<h3>Run the code</h3>
+<pre><code>python -m py_compile automon.py
+python automon.py</code></pre>
+
+<h3>Automon report</h3>
+<pre><code>========================================================================
+                     AUTOMON SRE BRAIN
+========================================================================
+
+INCIDENT PHASE
+------------------------------------------------------------------------
+Phase               : CRITICAL
+
+TRAFFIC
+------------------------------------------------------------------------
+Request rate        : ...
+Total requests      : ...
+
+ERRORS
+------------------------------------------------------------------------
+Error rate          : ...
+Error percentage    : ...
+Total errors        : ...
+
+LATENCY
+------------------------------------------------------------------------
+Average latency     : ...
+P50 latency         : ...
+P95 latency         : ...
+P99 latency         : ...
+
+LOG SIGNALS
+------------------------------------------------------------------------
+ERROR logs          : ...
+CRITICAL logs       : ...
+Database timeouts   : ...
+Connection pool     : ...
+
+AUTOMON ANALYSIS
+------------------------------------------------------------------------
+Severity            : CRITICAL
+Root cause          : Database connection pool
+Diagnosis           : Database connection pool exhaustion detected.
+
+DETECTED SIGNALS
+------------------------------------------------------------------------
+  - HIGH_ERROR_RATE
+  - SEVERE_P95_LATENCY
+  - CRITICAL_LOGS
+  - DATABASE_TIMEOUTS
+  - CONNECTION_POOL_EXHAUSTION
+
+========================================================================</code></pre>
+
+<div class="note yellow"><b>Important:</b> Automon's root-cause output is a rule-based diagnosis for this controlled simulator. It demonstrates evidence correlation; it does not prove causality in a real production system.</div>
+</section>
+
+<section id="testing">
+<h2>8. Complete console test sequence</h2>
+<div class="steps">
+<div class="card step"><h3>Check GKE</h3><pre><code>kubectl get nodes
+kubectl get pods -n sre-demo</code></pre></div>
+
+<div class="card step"><h3>Check metric collection</h3><pre><code>kubectl get podmonitoring -n sre-demo</code></pre></div>
+
+<div class="card step"><h3>Query Prometheus</h3><pre><code>curl -s \
+  "https://monitoring.googleapis.com/v1/projects/project-330d3be3-79e9-4693-98e/location/global/prometheus/api/v1/query?query=payment_requests_total" \
+  -H "Authorization: Bearer $(gcloud auth print-access-token)"</code></pre></div>
+
+<div class="card step"><h3>Query an operational rate</h3><pre><code>curl -s \
+  "https://monitoring.googleapis.com/v1/projects/project-330d3be3-79e9-4693-98e/location/global/prometheus/api/v1/query?query=rate(payment_errors_total%5B1m%5D)" \
+  -H "Authorization: Bearer $(gcloud auth print-access-token)"</code></pre></div>
+
+<div class="card step"><h3>Check Cloud Logging</h3><pre><code>gcloud logging read \
+'resource.type="k8s_container" AND resource.labels.namespace_name="sre-demo"' \
+--limit=10 \
+--format="table(timestamp,severity,jsonPayload.service,jsonPayload.message)"</code></pre></div>
+
+<div class="card step"><h3>Filter incident logs</h3><pre><code>gcloud logging read \
+'resource.type="k8s_container"
+ AND resource.labels.namespace_name="sre-demo"
+ AND (severity="ERROR" OR severity="CRITICAL")' \
+--limit=20 \
+--format="table(timestamp,severity,jsonPayload.service,jsonPayload.message)"</code></pre></div>
+
+<div class="card step"><h3>Run Automon</h3><pre><code>python automon.py</code></pre></div>
+</div>
+</section>
+
+<section id="demo">
+<h2>9. Recommended live demonstration</h2>
+<ol>
+<li>Show the GKE cluster and <code>incident-api</code> pod.</li>
+<li>Show <code>PodMonitoring</code> and explain that the application metrics are being collected.</li>
+<li>Run the PromQL request query and show the returned series.</li>
+<li>Run the error-rate query and explain counters versus rates.</li>
+<li>Show Cloud Logging and filter ERROR/CRITICAL events.</li>
+<li>Explain: metrics quantify degradation; logs provide application context.</li>
+<li>Run Automon.</li>
+<li>Wait for <code>LATENCY_SPIKE</code>, then <code>ERROR_SPIKE</code>, then <code>CRITICAL</code>.</li>
+<li>Run Automon again and show the correlated signals and diagnosis.</li>
+<li>Wait for <code>RECOVERY</code> and show that the service signals improve.</li>
+</ol>
+
+<div class="note green">
+<b>The SRE story:</b><br>
+Metrics answer <b>"How bad is the service?"</b><br>
+Logs answer <b>"What is the application reporting?"</b><br>
+Automon answers <b>"Which signals correlate, and what incident does the evidence suggest?"</b>
+</div>
+</section>
+
+<section id="github">
+<h2>10. GitHub Pages</h2>
+<p>This file is a standalone static website. Save it as <code>index.html</code> in the root of a GitHub repository.</p>
+
+<h3>Recommended repository</h3>
+<pre><code>sre-brain-demo/
+├── index.html
+├── app.py
+├── automon.py
+├── k8s/
+│   ├── incident-api.yaml
+│   └── podmonitoring.yaml
+└── README.md</code></pre>
+
+<h3>Push to GitHub</h3>
+<pre><code>git init
+git add index.html app.py automon.py k8s/
+git commit -m "Add SRE Brain observability demo"
+git branch -M main
+git remote add origin &lt;YOUR_GITHUB_REPOSITORY_URL&gt;
+git push -u origin main</code></pre>
+
+<h3>Enable GitHub Pages</h3>
+<ol>
+<li>Open the repository on GitHub.</li>
+<li>Open <b>Settings → Pages</b>.</li>
+<li>Choose <b>Deploy from a branch</b>.</li>
+<li>Select <b>main</b> and <b>/ (root)</b>.</li>
+<li>Save and wait for the Pages deployment.</li>
+</ol>
+
+<div class="note"><b>Security:</b> Never commit service-account JSON keys, access tokens, passwords, kubeconfig files or other secrets. The commands in this demo use the authenticated Cloud Shell environment.</div>
+</section>
+
+<section>
+<h2>11. Architecture at a glance</h2>
+<pre><code>
+                         ┌───────────────────────┐
+                         │         GKE           │
+                         │      payment-api      │
+                         └───────────┬───────────┘
+                                     │
+                    ┌────────────────┴────────────────┐
+                    │                                 │
+                 METRICS                            LOGS
+                    │                                 │
+                    ▼                                 ▼
+       ┌────────────────────────┐          ┌────────────────────┐
+       │ Managed Service for    │          │   Cloud Logging    │
+       │ Prometheus             │          │                    │
+       └───────────┬────────────┘          └─────────┬──────────┘
+                   │                                  │
+                   ▼                                  │
+              ┌──────────┐                            │
+              │ Monarch  │                            │
+              │ time     │                            │
+              │ series   │                            │
+              └────┬─────┘                            │
+                   │                                  │
+                   └──────────────┬───────────────────┘
+                                  ▼
+                         ┌──────────────────┐
+                         │     AUTOMON      │
+                         │                  │
+                         │ Signal detection │
+                         │ Correlation      │
+                         │ Diagnosis        │
+                         └────────┬─────────┘
+                                  │
+                                  ▼
+                         ┌──────────────────┐
+                         │     INCIDENT     │
+                         │                  │
+                         │ Severity         │
+                         │ Root cause       │
+                         │ Diagnosis        │
+                         │ Signals          │
+                         └──────────────────┘
+</code></pre>
+</section>
+
+</main>
+
+<footer>
+<div class="container">SRE Brain Demo • GKE + Managed Prometheus + Cloud Logging + Automon<br><span class="small">Static GitHub Pages website</span></div>
+</footer>
+</body>
+</html>
